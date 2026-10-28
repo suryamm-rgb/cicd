@@ -1,0 +1,49 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+title: 'fix: '
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For security problems, do **not** use this form. See SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. See error
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options: [local, test, stage, production]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version and commit
+      description: Shown in the site footer and at /health.json
+      placeholder: '1.0.0 · a1b2c3d'
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and operating system
+      placeholder: Firefox 130 on macOS 15
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output or screenshots
+      render: shell
