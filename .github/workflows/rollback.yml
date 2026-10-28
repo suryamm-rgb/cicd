@@ -1,0 +1,61 @@
+name: Rollback
+
+# Redeploys an image that already exists in ghcr.io (tag sha-<commit>). Nothing is built.
+# Run it from the branch that belongs to the environment: test -> test, stage -> stage,
+# production -> main. That is also what the environments' deployment branch policies require.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to roll back
+        type: choice
+        required: true
+        options: [test, stage, production]
+      sha:
+        description: Full 40-character commit SHA whose image should be redeployed
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          SHA: ${{ inputs.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character lowercase commit SHA"; exit 1
+          fi
+          case "$ENVIRONMENT" in
+            test) expected=test ;;
+            stage) expected=stage ;;
+            production) expected=main ;;
+            *) echo "::error::unknown environment ${ENVIRONMENT}"; exit 1 ;;
+          esac
+          if [ "$REF_NAME" != "$expected" ]; then
+            echo "::error::Run this workflow from branch '${expected}' to roll back ${ENVIRONMENT} (current: ${REF_NAME})"
+            exit 1
+          fi
+
+  rollback:
+    needs: guard
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: ${{ inputs.environment }}
+      sha: ${{ inputs.sha }}
+      rollback: true
+    permissions:
+      contents: read
+      checks: read
+      packages: write
+    secrets: inherit

@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: 'feat: '
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: What are you trying to achieve, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Website, Accessibility, Performance, CI/CD pipeline, Security, Documentation]
+    validations:
+      required: true

@@ -1,0 +1,15 @@
+# Placeholder teams: replace <org> with your GitHub organisation.
+# The last matching pattern wins. Code owner review is enforced on `main` (see scripts/setup-github.sh).
+
+*                         @<org>/release-managers
+/src/                     @<org>/developers @<org>/release-managers
+/e2e/                     @<org>/developers @<org>/release-managers
+
+# Delivery pipeline and infrastructure
+/.github/                 @<org>/devops
+/scripts/                 @<org>/devops
+/Dockerfile               @<org>/devops
+/nginx.conf               @<org>/devops
+/nginx-security-headers.conf @<org>/devops
+/lighthouserc.json        @<org>/devops
+/SECURITY.md              @<org>/devops
