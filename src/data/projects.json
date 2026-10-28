@@ -1,0 +1,50 @@
+[
+  {
+    "id": "pipeline-as-code",
+    "title": "Pipeline as Code",
+    "description": "Every check, build and deployment step lives in versioned workflow files that are reviewed like any other code.",
+    "tags": ["GitHub Actions", "YAML", "Automation"],
+    "year": 2026,
+    "status": "Live"
+  },
+  {
+    "id": "quality-gates",
+    "title": "Quality Gates",
+    "description": "Linting, strict type checking, unit tests with coverage thresholds and accessibility audits block risky changes before merge.",
+    "tags": ["Vitest", "ESLint", "axe-core"],
+    "year": 2026,
+    "status": "Live"
+  },
+  {
+    "id": "immutable-images",
+    "title": "Immutable Container Images",
+    "description": "One image is built per unique source tree and promoted unchanged from test to stage to production.",
+    "tags": ["Docker", "nginx", "GHCR"],
+    "year": 2026,
+    "status": "Live"
+  },
+  {
+    "id": "supply-chain-security",
+    "title": "Supply Chain Security",
+    "description": "Secret scanning, dependency review, CodeQL and Trivy image scans run on every pull request.",
+    "tags": ["CodeQL", "Trivy", "Dependabot"],
+    "year": 2026,
+    "status": "Live"
+  },
+  {
+    "id": "release-governance",
+    "title": "Release Governance",
+    "description": "Protected branches, required reviews and environment approvals keep production releases deliberate and auditable.",
+    "tags": ["Rulesets", "Environments", "CODEOWNERS"],
+    "year": 2026,
+    "status": "In progress"
+  },
+  {
+    "id": "fast-rollbacks",
+    "title": "Fast Rollbacks",
+    "description": "Any previously deployed commit can be redeployed from its existing image in minutes, without a rebuild.",
+    "tags": ["Rollback", "Smoke tests"],
+    "year": 2026,
+    "status": "Planned"
+  }
+]

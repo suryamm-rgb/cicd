@@ -1,0 +1,59 @@
+.form {
+  display: grid;
+  gap: 1.25rem;
+  max-width: 36rem;
+  margin-top: 1.5rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.field label {
+  font-weight: 600;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.field input[aria-invalid='true'],
+.field textarea[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.9375rem;
+}
+
+.summary,
+.success {
+  max-width: 36rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+}
+
+.summary {
+  border: 2px solid var(--danger);
+  color: var(--danger);
+}
+
+.success {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.form button {
+  justify-self: start;
+}
