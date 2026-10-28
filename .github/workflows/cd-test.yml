@@ -1,0 +1,20 @@
+name: CD (test)
+
+on:
+  push:
+    branches: [test]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: test
+      sha: ${{ github.sha }}
+    permissions:
+      contents: read
+      checks: read
+      packages: write
+    secrets: inherit

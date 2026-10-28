@@ -1,0 +1,286 @@
+name: Deploy (reusable)
+
+# Reusable deployment pipeline: gate on CI -> resolve/build image -> deploy over SSH -> smoke test.
+#
+# Image strategy: every image is tagged `sha-<commit>` and `tree-<git tree hash>`. When a commit has
+# the same tree as an image that was already built (a test -> stage -> main promotion by merge
+# commit), the existing image is re-tagged, never rebuilt.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub Environment to deploy to (test, stage or production)
+        type: string
+        required: true
+      sha:
+        description: Full commit SHA to deploy
+        type: string
+        required: true
+      rollback:
+        description: Only redeploy an existing image; never build and skip the CI gate
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci-gate:
+    name: ci-gate
+    if: ${{ !inputs.rollback }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - name: Wait for the required CI jobs on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          required='["commit-lint","lint","unit-test","build","e2e","lighthouse","security","docker"]'
+          deadline=$(( $(date +%s) + 45*60 ))
+          while true; do
+            runs="$(gh api --paginate "repos/${REPO}/commits/${SHA}/check-runs?per_page=100" \
+              | jq -s '[.[].check_runs[]]')"
+
+            # Latest run per required job name.
+            state="$(jq -c --argjson req "$required" '
+              . as $all
+              | [ $req[] as $name
+                  | ($all | map(select(.name == $name)) | sort_by(.started_at) | last) as $run
+                  | { name: $name, status: ($run.status // "missing"), conclusion: ($run.conclusion // "none") } ]
+            ' <<<"$runs")"
+            echo "$state" | jq -r '.[] | "\(.name): \(.status)/\(.conclusion)"'
+
+            failed="$(jq -r '[.[] | select(.status == "completed" and .conclusion != "success")] | length' <<<"$state")"
+            pending="$(jq -r '[.[] | select(.status != "completed")] | length' <<<"$state")"
+
+            if [ "$failed" != "0" ]; then
+              echo "::error::CI did not pass for ${SHA}; refusing to deploy."
+              exit 1
+            fi
+            if [ "$pending" = "0" ]; then
+              echo "All required CI jobs passed for ${SHA}."
+              exit 0
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for CI on ${SHA}."
+              exit 1
+            fi
+            sleep 30
+          done
+
+  image:
+    name: image
+    needs: ci-gate
+    # Run when the gate passed, or when it was skipped for a rollback.
+    if: ${{ !cancelled() && (needs.ci-gate.result == 'success' || (inputs.rollback && needs.ci-gate.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.resolve.outputs.image_ref }}
+      tree: ${{ steps.resolve.outputs.tree }}
+      reused: ${{ steps.resolve.outputs.reused }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Reuse or build the image
+        id: resolve
+        env:
+          SHA: ${{ inputs.sha }}
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          set -euo pipefail
+          repo="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${repo}"
+          tree="$(git rev-parse "${SHA}^{tree}")"
+          sha_tag="${image}:sha-${SHA}"
+          tree_tag="${image}:tree-${tree}"
+          exists() { docker buildx imagetools inspect "$1" >/dev/null 2>&1; }
+
+          if exists "$sha_tag"; then
+            echo "Image for this commit already exists; reusing it."
+            reused=true
+          elif [ "$ROLLBACK" = "true" ]; then
+            echo "::error::Rollback requested but ${sha_tag} does not exist."
+            exit 1
+          elif exists "$tree_tag"; then
+            echo "Identical source tree already built; re-tagging without a rebuild."
+            docker buildx imagetools create --tag "$sha_tag" "$tree_tag"
+            reused=true
+          else
+            version="$(node -p "require('./package.json').version")"
+            docker build \
+              --build-arg VITE_APP_VERSION="$version" \
+              --build-arg VITE_COMMIT_SHA="$SHA" \
+              --build-arg VCS_TREE="$tree" \
+              -t "$sha_tag" -t "$tree_tag" .
+            docker push "$sha_tag"
+            docker push "$tree_tag"
+            reused=false
+          fi
+
+          digest="$(docker buildx imagetools inspect "$sha_tag" --format '{{.Manifest.Digest}}')"
+          {
+            echo "image_ref=${image}@${digest}"
+            echo "tree=${tree}"
+            echo "reused=${reused}"
+          } >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: deploy (${{ inputs.environment }})
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.APP_URL }}
+    # One deployment at a time per environment; a running deployment is never cancelled.
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'cicd-showcase' }}
+      HOST_PORT: ${{ vars.HOST_PORT || '8080' }}
+      APP_URL: ${{ vars.APP_URL }}
+      IMAGE_REF: ${{ needs.image.outputs.image_ref }}
+      TREE: ${{ needs.image.outputs.tree }}
+      SHA: ${{ inputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for v in DEPLOY_HOST DEPLOY_USER APP_URL DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!v:-}" ]; then echo "::error::${v} is not configured for this environment"; exit 1; fi
+          done
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+            HostName ${DEPLOY_HOST}
+            User ${DEPLOY_USER}
+            Port ${DEPLOY_PORT}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Record the currently running image
+        id: previous
+        run: |
+          previous="$(ssh deploy-target "docker inspect --format '{{.Config.Image}}' '${CONTAINER_NAME}' 2>/dev/null || true")"
+          echo "previous=${previous}" >> "$GITHUB_OUTPUT"
+          echo "Previously deployed: ${previous:-<none>}"
+
+      - name: Deploy image
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'GHCR_TOKEN=%q\n' "$GHCR_TOKEN"
+            cat scripts/remote-deploy.sh
+          } | ssh deploy-target "bash -s -- '${IMAGE_REF}' '${CONTAINER_NAME}' '${HOST_PORT}' '${GITHUB_ACTOR}'"
+
+      - name: Smoke test /health.json
+        id: smoke
+        run: |
+          set -euo pipefail
+          url="${APP_URL%/}/health.json"
+          ok=false
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 10 "$url" -o health.json; then ok=true; break; fi
+            echo "Attempt ${i}: not healthy yet"
+            sleep 5
+          done
+          if [ "$ok" != "true" ]; then echo "::error::${url} never became healthy"; exit 1; fi
+          cat health.json
+
+          status="$(jq -r .status health.json)"
+          reported="$(jq -r .commit health.json)"
+          test "$status" = "ok"
+
+          # The running build must come from this commit, or from a commit with an identical tree
+          # (an image promoted between environments without a rebuild).
+          if [ "$reported" = "$SHA" ]; then
+            echo "Commit matches exactly."
+          else
+            reported_tree="$(git rev-parse "${reported}^{tree}")"
+            test "$reported_tree" = "$TREE"
+            echo "Commit ${reported} has the same source tree as ${SHA}."
+          fi
+
+      - name: Restore previous image after a failed smoke test
+        if: ${{ failure() && steps.smoke.conclusion == 'failure' && steps.previous.outputs.previous != '' }}
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ steps.previous.outputs.previous }}
+        run: |
+          {
+            printf 'GHCR_TOKEN=%q\n' "$GHCR_TOKEN"
+            cat scripts/remote-deploy.sh
+          } | ssh deploy-target "bash -s -- '${PREVIOUS}' '${CONTAINER_NAME}' '${HOST_PORT}' '${GITHUB_ACTOR}'"
+          echo "::warning::Smoke test failed; restored ${PREVIOUS}"
+
+      - name: Deployment summary
+        if: always()
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          REUSED: ${{ needs.image.outputs.reused }}
+          PREVIOUS: ${{ steps.previous.outputs.previous }}
+          JOB_STATUS: ${{ job.status }}
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          {
+            echo "### Deployment: ${ENVIRONMENT} (${JOB_STATUS})"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Commit | \`${SHA}\` |"
+            echo "| Source tree | \`${TREE}\` |"
+            echo "| Image | \`${IMAGE_REF}\` |"
+            echo "| Image reused (no rebuild) | ${REUSED} |"
+            echo "| Rollback | ${ROLLBACK} |"
+            echo "| Previous image | \`${PREVIOUS:-none}\` |"
+            echo "| URL | ${APP_URL} |"
+            if [ -f health.json ]; then
+              echo
+              echo '```json'
+              cat health.json
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

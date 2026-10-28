@@ -1,0 +1,49 @@
+name: CD (production)
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # The "production" GitHub Environment requires approval from release managers before the
+  # deploy job starts (configured by scripts/setup-github.sh).
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      sha: ${{ github.sha }}
+    permissions:
+      contents: read
+      checks: read
+      packages: write
+    secrets: inherit
+
+  release:
+    name: release
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          tag="release-$(date -u +%Y.%m.%d)-${RUN_NUMBER}"
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SHA" \
+            --title "$tag" \
+            --generate-notes \
+            --latest
+          echo "Created release ${tag} at ${SHA}" >> "$GITHUB_STEP_SUMMARY"
